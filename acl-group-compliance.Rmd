@@ -1,0 +1,293 @@
+---
+title: "Publisher ACL Compliance Audit"
+output: 
+  html_document:
+    theme: lumen
+rmd_output_metadata:
+  rsc_output_files:
+    - "compliance_check_fail.csv"
+---
+
+`r if(Sys.getenv('CONNECT_SERVER') == '') { "<h4>ERROR: You must set the CONNECT_SERVER environment variable</h4>\n" }`
+`r if(Sys.getenv('CONNECT_API_KEY') == '') { "<h4>ERROR: You must set the CONNECT_API_KEY environment variable</h4>\n" }`
+`r if(Sys.getenv('CONNECT_API_KEY') == '' || Sys.getenv('CONNECT_SERVER') == '') { knitr::knit_exit() }`
+
+Detect and alert when/if a user/publisher belonging to one business unit (Group) adds a user or group from another business unit (Group) to their content Access Control List (ACL). 
+
+Step 1: Decide how to configure **Most Permissive Access Type** restrictions for Publishers and Admins (globally) on the Server. This will determine whether all access levels are necessary to track in this report. Read more about 'Most Permissive Access Type' configuration options in the [Admin Guide](https://docs.rstudio.com/connect/admin/appendix/configuration/#Applications.MostPermissiveAccessType).
+
+**Generate a detailed list of all content items that have been shared with specific users or groups on RStudio Connect.** 
+
+This report assumes you have already created Pins for the result of an administrator call to `/v1/content` (content enumeration), `/v1/users`, and `/v1/groups`.
+
+## Get the Content List Pin
+
+```{r echo=FALSE}
+#
+# ** BEFORE EXECUTING **
+# - REPLACE PIN NAME 
+# - REPLACE SERVER URL
+#
+
+# Register RStudio Connect
+library(pins)
+board_register("rsconnect", server = "SERVER URL")
+
+# Retrieve Pin
+content <- pin_get(name = "PIN NAME", board = "rsconnect")
+```
+
+**Create a summary table of the number of content items under each access type.**
+
+- **`acl`** Access Control List - Specific users or groups
+- **`logged_in`** All users - login required
+- **`all`** Anyone - no login required
+
+```{r access-summary, echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(gt)
+
+df <- content %>%
+  select(guid, name, title, owner_guid, access_type, created_time, last_deployed_time, content_url, dashboard_url)
+
+df %>% count(access_type, sort = TRUE) %>%
+  gt() %>%
+  tab_header(
+    title = "Sharing Settings",
+    subtitle = "RStudio Connect Server Content Audit"
+  ) %>%
+  cols_label(
+    access_type = "Access Type",
+    n = "Count"
+  )
+```
+
+Filter the content list to examine only content items with `access_type == 'acl'`. This will contain two sub-types of content relevant for auditing: 
+
+- Content items accessible only by the publisher-owner (no additional users or groups)
+- Content items accessible by a list of specific users or groups
+
+```{r include=FALSE}
+
+# Filter content list by 'acl' access_type
+acl_only <- df %>%
+  filter(access_type == 'acl')
+```
+
+
+## Permissions API
+
+Calculate the number of content items in each of the `acl` sub-type groups:
+
+```{r include=FALSE}
+library(httr)
+
+# Function for initializing an empty permissions tibble
+empty_permissions <- function() {
+  cols <- c('id','content_guid','principal_guid','principal_type','role')
+  cols %>% purrr::map_dfc(setNames, object = list(character()))
+}
+
+# Function for calling the content `/permissions` API endpoint
+get_permissions <- function(guid) {
+  permissions <- GET(paste0(Sys.getenv("CONNECT_SERVER"),"__api__/v1/content/",guid,"/permissions"),
+    add_headers(Authorization = paste("Key", Sys.getenv("CONNECT_API_KEY"))))
+  
+  if (status_code(permissions) == 200){
+    result <- tidyr::unnest_wider(tibble::tibble(dat = content(permissions)), dat)
+    if (dim(result)[1] == 0){
+      empty_permissions() 
+    } else {
+      result
+    }
+  } else {
+    empty_permissions()
+  }
+
+}
+
+# Get permissions for all ACL-type content items
+# Content that is accessible only by the publisher-owner (no additional users or groups) will return no records
+
+acl_info <- purrr::map(acl_only$guid, get_permissions)
+acl_tibble <- tidyr::unnest(tibble::tibble(dat = acl_info), dat)
+
+# Calculate the number of content items accessible by the publisher-owner plus additional users or groups
+acl_distinct <- acl_tibble %>% 
+  select(content_guid) %>%
+  n_distinct()
+```
+
+#### Content items accessible only by the publisher-owner (no additional users or groups): `r nrow(acl_only) - acl_distinct`
+
+#### Content items accessible by a list of specific users or groups: `r acl_distinct` 
+
+For each content item shared with additional specific users and groups, report the user/group and list whether they have viewer or collaborator access:
+
+```{r echo=FALSE}
+#
+# REPLACE PIN NAMES BEFORE EXECUTING
+# - user_list
+# - group_list
+#
+
+library(reactable)
+
+# Get the user info Pin
+user_list <- pin_get(name = "kelly.obriant/user-info", board = "rsconnect")
+
+# Get the group info Pin
+group_list <- pin_get(name = "kelly.obriant/group-info", board = "rsconnect")
+
+# Add user and group names to the permission info
+acl_detail <- acl_tibble %>% 
+  left_join(user_list, by=c("principal_guid" = "guid")) %>%
+  left_join(group_list, by=c("principal_guid" = "guid")) %>%
+  select(id, content_guid, principal_guid, principal_type, role, username, email, user_role, locked, name) %>%
+  rename(group_name = name)
+
+audit_table <- acl_detail %>%
+  left_join(content, by=c("content_guid" = "guid")) %>%
+  rename(content_name = name, 
+         content_title = title,
+         share_username = username,
+         share_email = email,
+         share_type = principal_type,
+         share_role = role,
+         share_group = group_name,
+         share_guid = principal_guid) %>%
+  select(content_guid, owner_guid, content_title, dashboard_url, share_role, share_type, share_username, share_group, share_guid)
+
+# Create filtered tables for share_type :: user and group 
+audit_table_users <- audit_table %>%
+  filter(share_type == 'user')
+audit_table_groups <- audit_table %>%
+  filter(share_type == 'group')
+
+```
+
+### Get group memberbership details
+
+**Warning: Group member enumeration is currently not supported for LDAP.**
+
+This function is available only when groups are enabled in RStudio Connect and only for Password, PAM, OAuth2, SAML and Proxied authentication. The `email` field is not populated for non-admins when `Server.HideEmailAddresses` is enabled. [Read More](https://docs.rstudio.com/connect/api/#get-/v1/groups/{group_guid}/members)
+
+
+```{r echo=FALSE}
+library(tibble)
+
+# Function for initializing an empty membership tibble
+empty_membership <- function() {
+  cols <- c('group_guid','email','username','user_role','guid')
+  cols %>% purrr::map_dfc(setNames, object = list(character()))
+}
+
+# Function for calling the content `/groups/{guid}/members` API endpoint
+# This endpoint gets the group member details
+# WARNING! Group member enumeration is currently not supported for LDAP
+member_details <- function(group_guid){
+  membership <- GET(paste0(Sys.getenv("CONNECT_SERVER"),"__api__/v1/groups/",group_guid,"/members"),
+    add_headers(Authorization = paste("Key", Sys.getenv("CONNECT_API_KEY"))))
+
+  if (status_code(membership) == 200){
+    result <- tidyr::unnest_wider(tibble::tibble(dat = content(membership)$result), dat)
+    if (dim(result)[1] == 0){
+      empty_membership() 
+    } else {
+      result %>%
+        add_column(group_guid = group_guid) %>%
+        select(group_guid, email, username, user_role, guid)
+    }
+  } else {
+    empty_membership()
+  }
+}
+
+# Get membership details for all groups
+group_info <- purrr::map(group_list$guid, member_details)
+membership_tibble <- tidyr::unnest(tibble::tibble(dat = group_info), dat)
+
+```
+
+
+
+### Get group membership for each content owner (publishers & administrators)
+
+```{r compliance-check, echo=FALSE}
+# Distinct content owner guids
+owners_list <- audit_table %>%
+  distinct(owner_guid)
+
+# Function to return group memberships list given a user guid
+find_memberships <- function(user_guid){
+  mships <- membership_tibble %>%
+    filter(guid == user_guid) %>%
+    select(group_guid)
+  
+  if (dim(mships)[1] == 0){
+      tibble(user_guid = user_guid, groups = NA)
+    } else {
+      tibble(user_guid = user_guid, groups = mships$group_guid)
+    }
+
+}
+
+owner_info <- purrr::map(owners_list$owner_guid, find_memberships)
+owner_mships <- tidyr::unnest(tibble::tibble(dat = owner_info), dat)
+
+# Check if the content owner belongs to the same group they've added in the ACL 
+# audit_table_groups
+
+compliance_check_pass <- inner_join(audit_table_groups, owner_mships, by=c("owner_guid" = "user_guid", "share_guid" = "groups"))
+
+compliance_check_fail <- anti_join(audit_table_groups, owner_mships, by=c("owner_guid" = "user_guid", "share_guid" = "groups"))
+```
+
+#### Content items passing compliance check: `r nrow(compliance_check_pass)`
+
+#### Content items failing compliance check: `r nrow(compliance_check_fail)`
+
+```{r audit-failure, echo=FALSE}
+library(reactable)
+# Display reactable for all items failing the compliance check
+
+compliance_check_fail %>%
+  select(-share_username) %>%
+  reactable(searchable = TRUE, highlight = TRUE, columns = list(
+    content_guid = colDef(name = "GUID"),
+    owner_guid = colDef(name = "Owner GUID"),
+    content_title = colDef(name = "Title"),
+    dashboard_url = colDef(name = "Content URL", cell = function(value) {
+    htmltools::tags$a(href = value, target = "_blank", "Link")
+    }),
+    share_role = colDef(name = "Access Type"),
+    share_type = colDef(name = "User/Group"),
+    share_group = colDef(name = "Group Name"),
+    share_guid = colDef(name = "Group GUID")
+  ))
+```
+
+### Download the full compliance report contents
+
+```{r include=FALSE}
+
+# Write the compliance_check_fail response out to a CSV file for download
+write.csv(compliance_check_fail, "compliance_check_fail.csv", row.names=FALSE)
+```
+
+- Report: [compliance_check_fail.csv](compliance_check_fail.csv)
+
+
+```{r connect_email, echo=FALSE}
+library(blastula)
+
+# Send an email alert if content items fail compliance check
+if (nrow(compliance_check_fail) > 0) {
+  render_connect_email(input = "compliance-alert.Rmd") %>%
+    attach_connect_email(
+      subject = "RStudio Connect Content ACL Compliance Alert"
+    )
+} else {
+  suppress_scheduled_email()
+}
+```

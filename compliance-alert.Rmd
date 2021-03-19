@@ -1,0 +1,15 @@
+---
+title: "Action Required: RStudio Connect Content ACL Compliance Failure"
+output: blastula::blastula_email
+---
+
+## RStudio Connect Publisher ACL Compliance Audit Alert
+
+A publisher compliance audit has detected a failure. Review the following content items which may have been shared outside their recommended business unit groups in violation of compliance rules and recommendations. 
+
+```{r compliance-check}
+```
+
+#### Content items passing compliance check: `r nrow(compliance_check_pass)`
+
+#### Content items failing compliance check: `r nrow(compliance_check_fail)`
