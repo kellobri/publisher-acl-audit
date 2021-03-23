@@ -11,7 +11,7 @@ An automated publisher compliance audit has detected a failure.
 
 Please review the following content items which may have been shared outside their recommended business unit groups in violation of compliance rules and recommendations.
 
--ACL auditor
+-   Your friendly neighborhood ACL auditor
 
 ```{r compliance-check}
 ```
