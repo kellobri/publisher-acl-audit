@@ -8,15 +8,13 @@ rmd_output_metadata:
     - "compliance_check_fail.csv"
 ---
 
-`r if(Sys.getenv('CONNECT_SERVER') == '') { "<h4>ERROR: You must set the CONNECT_SERVER environment variable</h4>\n" }`
-`r if(Sys.getenv('CONNECT_API_KEY') == '') { "<h4>ERROR: You must set the CONNECT_API_KEY environment variable</h4>\n" }`
-`r if(Sys.getenv('CONNECT_API_KEY') == '' || Sys.getenv('CONNECT_SERVER') == '') { knitr::knit_exit() }`
+`r if(Sys.getenv('CONNECT_SERVER') == '') { "<h4>ERROR: You must set the CONNECT_SERVER environment variable</h4>\n" }` `r if(Sys.getenv('CONNECT_API_KEY') == '') { "<h4>ERROR: You must set the CONNECT_API_KEY environment variable</h4>\n" }` `r if(Sys.getenv('CONNECT_API_KEY') == '' || Sys.getenv('CONNECT_SERVER') == '') { knitr::knit_exit() }`
 
-Detect and alert when/if a user/publisher belonging to one business unit (Group) adds a user or group from another business unit (Group) to their content Access Control List (ACL). 
+Motivation: many organizations have groups of users organized by line of business, or some other group. As as result, there are times when you do not want users within those groups to see each other's content that they publish to RStudio Connect. Today there are two solutions for this scenario. One, you can manage a separate instance of Connect for each business unit likely using an RStudio Connect Enteprise license. Two, you can audit content that is published on RStudio Connect and receive an automated report warning you. This document will walk through the second solution and in particular shows you how to first detect, and then receive an alert if a user belonging to one business unit adds a user or batch of users from another business unit to their content Access Control List ("ACL").
 
 Step 1: Decide how to configure **Most Permissive Access Type** restrictions for Publishers and Admins (globally) on the Server. This will determine whether all access levels are necessary to track in this report. Read more about 'Most Permissive Access Type' configuration options in the [Admin Guide](https://docs.rstudio.com/connect/admin/appendix/configuration/#Applications.MostPermissiveAccessType).
 
-**Generate a detailed list of all content items that have been shared with specific users or groups on RStudio Connect.** 
+**Generate a detailed list of all content items that have been shared with specific users or groups on RStudio Connect.**
 
 This report assumes you have already created Pins for the result of an administrator call to `/v1/content` (content enumeration), `/v1/users`, and `/v1/groups`.
 
@@ -30,18 +28,25 @@ This report assumes you have already created Pins for the result of an administr
 #
 
 # Register RStudio Connect
+### start of temp stuff
 library(pins)
-board_register("rsconnect", server = "SERVER URL")
-
+board_register("rsconnect", server = "https://rsc.radixu.com")
 # Retrieve Pin
-content <- pin_get(name = "PIN NAME", board = "rsconnect")
+content <- pin_get(name = "kelly.obriant/content-info", board = "rsconnect")
+### end of temp stuff
+
+# library(pins)
+# board_register("rsconnect", server = "SERVER URL")
+# 
+# # Retrieve Pin
+# content <- pin_get(name = "PIN NAME", board = "rsconnect")
 ```
 
 **Create a summary table of the number of content items under each access type.**
 
-- **`acl`** Access Control List - Specific users or groups
-- **`logged_in`** All users - login required
-- **`all`** Anyone - no login required
+-   **`acl`** Access Control List - Specific users or groups
+-   **`logged_in`** All users - login required
+-   **`all`** Anyone - no login required
 
 ```{r access-summary, echo=FALSE, message=FALSE, warning=FALSE}
 library(dplyr)
@@ -62,10 +67,10 @@ df %>% count(access_type, sort = TRUE) %>%
   )
 ```
 
-Filter the content list to examine only content items with `access_type == 'acl'`. This will contain two sub-types of content relevant for auditing: 
+Filter the content list to examine only content items with `access_type == 'acl'`. This will contain two sub-types of content relevant for auditing:
 
-- Content items accessible only by the publisher-owner (no additional users or groups)
-- Content items accessible by a list of specific users or groups
+-   Content items accessible only by the publisher-owner (no additional users or groups)
+-   Content items accessible by a list of specific users or groups
 
 ```{r include=FALSE}
 
@@ -73,7 +78,6 @@ Filter the content list to examine only content items with `access_type == 'acl'
 acl_only <- df %>%
   filter(access_type == 'acl')
 ```
-
 
 ## Permissions API
 
@@ -120,7 +124,7 @@ acl_distinct <- acl_tibble %>%
 
 #### Content items accessible only by the publisher-owner (no additional users or groups): `r nrow(acl_only) - acl_distinct`
 
-#### Content items accessible by a list of specific users or groups: `r acl_distinct` 
+#### Content items accessible by a list of specific users or groups: `r acl_distinct`
 
 For each content item shared with additional specific users and groups, report the user/group and list whether they have viewer or collaborator access:
 
@@ -170,8 +174,7 @@ audit_table_groups <- audit_table %>%
 
 **Warning: Group member enumeration is currently not supported for LDAP.**
 
-This function is available only when groups are enabled in RStudio Connect and only for Password, PAM, OAuth2, SAML and Proxied authentication. The `email` field is not populated for non-admins when `Server.HideEmailAddresses` is enabled. [Read More](https://docs.rstudio.com/connect/api/#get-/v1/groups/{group_guid}/members)
-
+This function is available only when groups are enabled in RStudio Connect and only for Password, PAM, OAuth2, SAML and Proxied authentication. The `email` field is not populated for non-admins when `Server.HideEmailAddresses` is enabled. [Read More](https://docs.rstudio.com/connect/api/#get-/v1/groups/%7Bgroup_guid%7D/members)
 
 ```{r echo=FALSE}
 library(tibble)
@@ -208,8 +211,6 @@ group_info <- purrr::map(group_list$guid, member_details)
 membership_tibble <- tidyr::unnest(tibble::tibble(dat = group_info), dat)
 
 ```
-
-
 
 ### Get group membership for each content owner (publishers & administrators)
 
@@ -275,8 +276,7 @@ compliance_check_fail %>%
 write.csv(compliance_check_fail, "compliance_check_fail.csv", row.names=FALSE)
 ```
 
-- Report: [compliance_check_fail.csv](compliance_check_fail.csv)
-
+-   Report: [compliance\_check\_fail.csv](compliance_check_fail.csv)
 
 ```{r connect_email, echo=FALSE}
 library(blastula)

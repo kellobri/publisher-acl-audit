@@ -5,7 +5,13 @@ output: blastula::blastula_email
 
 ## RStudio Connect Publisher ACL Compliance Audit Alert
 
-A publisher compliance audit has detected a failure. Review the following content items which may have been shared outside their recommended business unit groups in violation of compliance rules and recommendations. 
+Hello,
+
+An automated publisher compliance audit has detected a failure.
+
+Please review the following content items which may have been shared outside their recommended business unit groups in violation of compliance rules and recommendations.
+
+-ACL auditor
 
 ```{r compliance-check}
 ```
